@@ -1,9 +1,8 @@
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 
-use crate::auth;
 use crate::error::AppError;
 use crate::users;
 use crate::AppState;
@@ -34,6 +33,12 @@ pub struct NoteOut {
     pub updated_at: String,
 }
 
+enum Perm {
+    Owner,
+    Write,
+    Read,
+}
+
 struct NoteRow {
     id: i64,
     owner_id: i64,
@@ -43,6 +48,50 @@ struct NoteRow {
     version: i64,
     created_at: String,
     updated_at: String,
+}
+
+fn access(conn: &rusqlite::Connection, user: i64, note: &NoteRow) -> Option<Perm> {
+    if note.owner_id == user {
+        return Some(Perm::Owner);
+    }
+
+    let share: Option<String> = match conn
+        .query_row(
+            "SELECT permission FROM note_shares WHERE note_id = ?1 AND user_id = ?2",
+            params![note.id, user],
+            |row| row.get(0),
+        )
+        .optional()
+    {
+        Ok(share) => share,
+        Err(_) => return None,
+    };
+    match share.as_deref() {
+        Some("write") => return Some(Perm::Write),
+        Some("read") => return Some(Perm::Read),
+        Some(_) => return None,
+        None => {}
+    }
+
+    let team_id = note.team_id?;
+    let is_member: bool = match conn.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM team_members WHERE team_id = ?1 AND user_id = ?2
+         )",
+        params![team_id, user],
+        |row| row.get(0),
+    ) {
+        Ok(is_member) => is_member,
+        Err(_) => return None,
+    };
+    is_member.then_some(Perm::Read)
+}
+
+fn permits(actual: Perm, required: Perm) -> bool {
+    matches!(
+        (actual, required),
+        (Perm::Owner, _) | (Perm::Write, Perm::Write | Perm::Read) | (Perm::Read, Perm::Read)
+    )
 }
 
 impl From<NoteRow> for NoteOut {
@@ -87,12 +136,31 @@ fn note_error(error: rusqlite::Error) -> AppError {
     }
 }
 
+fn identity(conn: &rusqlite::Connection, headers: &HeaderMap) -> Result<i64, AppError> {
+    let id = headers
+        .get("x-user-id")
+        .ok_or_else(|| AppError::Unauthorized("missing X-User-Id header".into()))?
+        .to_str()
+        .ok()
+        .and_then(|value| value.parse::<i64>().ok())
+        .ok_or_else(|| AppError::Unauthorized("invalid X-User-Id header".into()))?;
+
+    match conn.query_row("SELECT 1 FROM users WHERE id = ?1", [id], |_| Ok(())) {
+        Ok(()) => Ok(id),
+        Err(rusqlite::Error::QueryReturnedNoRows) => {
+            Err(AppError::Unauthorized("unknown user".into()))
+        }
+        Err(e) => Err(AppError::Internal(e.to_string())),
+    }
+}
+
 pub async fn create_note(
     State(state): State<AppState>,
     headers: HeaderMap,
     json: Result<axum::Json<NewNote>, axum::extract::rejection::JsonRejection>,
 ) -> Result<(StatusCode, Json<NoteOut>), AppError> {
-    let owner_id = auth::identity(&state, &headers)?;
+    let conn = state.db.lock().unwrap();
+    let owner_id = identity(&conn, &headers)?;
     let NewNote {
         title,
         body,
@@ -104,7 +172,6 @@ pub async fn create_note(
         .ok_or_else(|| AppError::BadRequest("title is required".into()))?;
     let body = body.unwrap_or_default();
 
-    let conn = state.db.lock().unwrap();
     if let Some(team_id) = team_id {
         let team_exists: bool = conn
             .query_row(
@@ -147,13 +214,13 @@ pub async fn get_note(
     Path(id_str): Path<String>,
     headers: HeaderMap,
 ) -> Result<Json<NoteOut>, AppError> {
-    let user_id = auth::identity(&state, &headers)?;
-    let id = users::parse_id(&id_str)?;
     let conn = state.db.lock().unwrap();
+    let user_id = identity(&conn, &headers)?;
+    let id = users::parse_id(&id_str)?;
     let note = note_row(&conn, id).map_err(note_error)?;
-    if note.owner_id != user_id {
-        return Err(AppError::NotFound("note not found".into()));
-    }
+    let permission =
+        access(&conn, user_id, &note).ok_or_else(|| AppError::NotFound("note not found".into()))?;
+    debug_assert!(permits(permission, Perm::Read));
     Ok(Json(note.into()))
 }
 
@@ -163,7 +230,8 @@ pub async fn patch_note(
     headers: HeaderMap,
     json: Result<axum::Json<PatchNote>, axum::extract::rejection::JsonRejection>,
 ) -> Result<Json<NoteOut>, AppError> {
-    let user_id = auth::identity(&state, &headers)?;
+    let conn = state.db.lock().unwrap();
+    let user_id = identity(&conn, &headers)?;
     let id = users::parse_id(&id_str)?;
     let PatchNote {
         title,
@@ -185,10 +253,11 @@ pub async fn patch_note(
         None => None,
     };
 
-    let conn = state.db.lock().unwrap();
     let current = note_row(&conn, id).map_err(note_error)?;
-    if current.owner_id != user_id {
-        return Err(AppError::NotFound("note not found".into()));
+    let permission = access(&conn, user_id, &current)
+        .ok_or_else(|| AppError::NotFound("note not found".into()))?;
+    if !permits(permission, Perm::Write) {
+        return Err(AppError::Forbidden("insufficient permissions".into()));
     }
     if current.version != version {
         return Err(AppError::Conflict("version conflict".into()));
@@ -197,18 +266,18 @@ pub async fn patch_note(
     let changed = match (title.as_deref(), body.as_deref()) {
         (Some(title), Some(body)) => conn.execute(
             "UPDATE notes SET title = ?1, body = ?2, version = version + 1,
-             updated_at = datetime('now') WHERE id = ?3 AND owner_id = ?4 AND version = ?5",
-            params![title, body, id, user_id, version],
+             updated_at = datetime('now') WHERE id = ?3 AND version = ?4",
+            params![title, body, id, version],
         ),
         (Some(title), None) => conn.execute(
             "UPDATE notes SET title = ?1, version = version + 1,
-             updated_at = datetime('now') WHERE id = ?2 AND owner_id = ?3 AND version = ?4",
-            params![title, id, user_id, version],
+             updated_at = datetime('now') WHERE id = ?2 AND version = ?3",
+            params![title, id, version],
         ),
         (None, Some(body)) => conn.execute(
             "UPDATE notes SET body = ?1, version = version + 1,
-             updated_at = datetime('now') WHERE id = ?2 AND owner_id = ?3 AND version = ?4",
-            params![body, id, user_id, version],
+             updated_at = datetime('now') WHERE id = ?2 AND version = ?3",
+            params![body, id, version],
         ),
         (None, None) => unreachable!("title or body was validated above"),
     }
@@ -226,12 +295,14 @@ pub async fn delete_note(
     Path(id_str): Path<String>,
     headers: HeaderMap,
 ) -> Result<StatusCode, AppError> {
-    let user_id = auth::identity(&state, &headers)?;
-    let id = users::parse_id(&id_str)?;
     let conn = state.db.lock().unwrap();
+    let user_id = identity(&conn, &headers)?;
+    let id = users::parse_id(&id_str)?;
     let note = note_row(&conn, id).map_err(note_error)?;
-    if note.owner_id != user_id {
-        return Err(AppError::NotFound("note not found".into()));
+    let permission =
+        access(&conn, user_id, &note).ok_or_else(|| AppError::NotFound("note not found".into()))?;
+    if !matches!(permission, Perm::Owner) {
+        return Err(AppError::Forbidden("insufficient permissions".into()));
     }
     conn.execute(
         "DELETE FROM notes WHERE id = ?1 AND owner_id = ?2",
