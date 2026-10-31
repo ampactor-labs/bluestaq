@@ -71,7 +71,7 @@ Receipt (writer appends):
 - First action: write `Cargo.toml`.
 - Step cap: 7 (Cargo.toml, lib.rs, main.rs, tests/health.rs, .gitignore, README.md, `cargo test`).
 - Verification command: `cargo test` in repo root — expect `test result: ok. 1 passed`.
-- Gate: [ ] approved by Morgan
+- Gate: [*] approved by Morgan
 
 Receipt (writer appends):
 - Files changed: `Cargo.toml` (new, verbatim per box), `src/lib.rs` (new, verbatim per box + `use axum::{Json, routing::get};`), `src/main.rs` (new), `tests/health.rs` (new), `.gitignore` (new, exactly `/target` + `*.db`), `README.md` (replaced 1-line stub with box's skeleton).
@@ -92,7 +92,7 @@ Receipt (writer appends):
 - Decisions made:
   - `src/db.rs`:
     - `pub const SCHEMA: &str` = the global-decisions schema verbatim: `PRAGMA foreign_keys = ON;` then `users(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL DEFAULT (datetime('now')))`; `teams(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')))`; `team_members(team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, PRIMARY KEY(team_id,user_id))`; `notes(id INTEGER PRIMARY KEY AUTOINCREMENT, owner_id INTEGER NOT NULL REFERENCES users(id), team_id INTEGER REFERENCES teams(id), title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', version INTEGER NOT NULL DEFAULT 1, created_at/updated_at TEXT NOT NULL DEFAULT (datetime('now')))`; `note_shares(note_id INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE, user_id INTEGER NOT NULL REFERENCES users(id), permission TEXT NOT NULL CHECK(permission IN ('read','write')), PRIMARY KEY(note_id,user_id))`.
-    - `pub fn new_in_memory() -> rusqlite::Connection`: open `:memory:`, `pragma_update(None, "foreign_keys", "ON")`, execute the CREATE TABLEs from `SCHEMA` (PRAGMA set via pragma_update, DDL via `execute_batch`).
+    - `pub fn new_in_memory() -> rusqlite::Connection`: open `:memory:`, `pragma_update(None, "foreign_keys", "ON")`, execute the CREATE TABLEs from `SCHEMA` (PRAGMA set via pragma_update, DDL via `execute_batch`). **Gate amendment (Morgan, 2026-10-31): all `CREATE TABLE` are `CREATE TABLE IF NOT EXISTS` — schema creation is idempotent so a file-backed database restarts cleanly; disclose in the receipt.**
     - `pub fn new_file(path: &str) -> rusqlite::Result<Connection>`: open path, same pragma + DDL. Error → `AppError::Internal`.
     - Unit test inside db.rs: `new_in_memory()` yields exactly the 5 tables in `sqlite_master`.
   - `src/error.rs`: `pub enum AppError { BadRequest(String), Unauthorized, NotFound(String), Conflict(String), Internal(String) }` with `impl IntoResponse`: 400/401/404/409/500, each body JSON `{"error": "<msg>"}`.
@@ -106,9 +106,27 @@ Receipt (writer appends):
 - Gate: [ ] approved by Morgan (draft — finalized when Box 1 receipt is reviewed)
 
 Receipt (writer appends):
-- Files changed:
-- Verification output:
-- Ambiguity hit:
+- Files changed: `src/db.rs` (new), `src/error.rs` (new), `src/lib.rs` (modified: `AppState` + `router(state)`), `tests/health.rs` (modified: builds `AppState::in_memory()`), and — **box gap, forced, disclosed** — `src/main.rs` (2 lines: `let state = notes::AppState::in_memory();` passed to `notes::router(state)`). The box's `router` signature change makes `main.rs` uncompilable as-is, and `cargo test` (the verification command) builds the bin target; `main.rs` is not in the box's files list. `AppState` has no file-backed constructor in this box, so `in_memory()` is the only available choice; a later box presumably switches main to a file DB.
+- Verification output: `cargo test` in repo root:
+  ```
+  Running unittests src/lib.rs (target/debug/deps/notes-5216898542882618)
+  running 1 test
+  test db::tests::in_memory_db_has_exactly_five_tables ... ok
+  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+
+  Running tests/health.rs (target/debug/deps/health-e8993e72a17ca554)
+  running 1 test
+  test health_returns_ok ... ok
+  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+  ```
+  (main.rs unit harness: 0 tests, ok; doc-tests: 0, ok.)
+- Ambiguity hit: several, all disclosed:
+  1. **Gate amendment applied (Morgan, 2026-10-31):** all 5 tables are `CREATE TABLE IF NOT EXISTS` so file-backed DBs restart cleanly; `new_file` re-applies the idempotent schema on open.
+  2. Box's `axum::JsonRejection` does not exist in axum 0.8.9 (no root re-export). Verified against the vendored crate source: canonical path is `axum::extract::rejection::JsonRejection`. Implemented with that path per the standing deviation rule. **Box 3 (line 120) also names `axum::JsonRejection` — planner should fix that reference before gating Box 3.**
+  3. `new_in_memory()` signature is non-Result per box; used `.expect(...)` on open/init (in-memory open failure is effectively impossible; no caller can recover anyway).
+  4. Schema unit test filters `name NOT LIKE 'sqlite_%'` so "exactly 5 tables" is not tripped by SQLite's internal `sqlite_sequence` (created for AUTOINCREMENT); intent preserved, test cannot be flaky.
+  5. `AppError::Unauthorized` body message unspecified by the box → `"unauthorized"` (only messageless variant; Box 3+ tests pin the other messages).
+  6. Added `impl From<axum::extract::rejection::JsonRejection> for AppError` in `error.rs` as the uniform mechanism for the box's JSON-body decision (file already in scope).
 
 ---
 
@@ -131,6 +149,30 @@ Receipt (writer appends):
 - Step cap: 8 (users.rs, teams.rs, db.rs edit, lib.rs routes, tests/users.rs, tests/teams.rs, `cargo test`, one fix pass if needed).
 - Verification command: `cargo test` in repo root — expect 17 passed, 0 failed.
 - Gate: [ ] approved by Morgan
+
+Receipt (writer appends):
+- Files changed:
+- Verification output:
+- Ambiguity hit:
+
+---
+
+## Box 4: Notes CRUD (owner-only) + tests
+- Files touched: `src/auth.rs` (new), `src/notes.rs` (new), `src/lib.rs` (register routes), `tests/notes.rs` (new).
+- Decisions made:
+  - Identity helper (no new deps — no async-trait crate): `src/auth.rs` defines `pub fn identity(state: &AppState, headers: &axum::http::HeaderMap) -> Result<i64, AppError>`. Reads `x-user-id`: missing → `Unauthorized` `"missing X-User-Id header"`; non-integer → `Unauthorized` `"invalid X-User-Id header"`; not a row in `users` → `Unauthorized` `"unknown user"`. Every /notes handler takes `headers: axum::http::HeaderMap` and calls this first.
+  - Scope: owner-only in this box. Non-owner on any /notes/{id} route → 404 `"note not found"` (indistinguishable from missing, per spec's "does not exist = 404"). Box 5 generalizes to the full matrix.
+  - `NoteOut` (serde derive): `{ id: i64, owner_id: i64, team_id: Option<i64>, title: String, body: String, version: i64, created_at: String, updated_at: String }` — `team_id` serializes as `null` when absent.
+  - POST /notes: body `{ title: Option<String>, body: Option<String>, team_id: Option<i64> }`. title missing or empty-after-trim → 400 `"title is required"`. team_id present and team missing → 404 `"team not found"`. team_id present and owner not in `team_members` → 403 `"not a member of that team"`. body defaults to `""`. Insert with `version = 1`. 201 + `NoteOut`.
+  - GET /notes/{id}: owner → 200 `NoteOut`; else/missing → 404.
+  - PATCH /notes/{id}: body `{ title: Option<String>, body: Option<String>, version: Option<i64> }`. version missing → 400 `"version is required"`. Neither title nor body present → 400 `"title or body is required"`. title present but empty-after-trim → 400 `"title is required"`. body present may be `""` (valid). Non-owner or missing note → 404 `"note not found"`. Version mismatch → 409 `"version conflict"`. Apply as one `UPDATE notes SET <given fields>, version = version + 1, updated_at = datetime('now') WHERE id = ? AND owner_id = ? AND version = ?` (SET clause built from the fields present); 0 rows with existing+matching version is impossible under the single mutex, but if it happens → 409. 200 + fresh `NoteOut`.
+  - DELETE /notes/{id}: owner → `StatusCode::NO_CONTENT`, empty body; else → 404. Note deletion cascades its shares (Box 2 schema).
+  - Routes registered: `/notes` post; `/notes/{id}` get + patch + delete (separate `.route` calls, same path).
+  - Tests (`tests/notes.rs`, tower oneshot, per-file `req` helper as in Box 3 plus `setup()` → fresh app, owner user, second user, team owned by creator owner; all via router calls): create 201 (version 1, body `""`, team_id null); create missing title 400; create malformed JSON 400; create with member team 201; create team 9999 → 404; create non-member team → 403; missing header 401 (+ non-integer 401, nonexistent user 401 — three asserts, one test); get owner 200; get id 9999 → 404; get as non-owner 404; patch bumps version 200 (v1→v2 is the assertion; title change visible on re-GET; assert only `updated_at >= created_at` as string comparison — `datetime('now')` has 1-second resolution, create+patch land in the same second, do NOT assert changed); patch missing version 400; patch stale version 409; patch with only version 400; patch as non-owner 404; delete 204 (re-GET 404); delete as non-owner 404.
+- First action: write `src/auth.rs`.
+- Step cap: 7 (auth.rs, notes.rs, lib.rs, tests/notes.rs, `cargo test`, two fix passes if needed).
+- Verification command: `cargo test` in repo root — expect 32 passed, 0 failed.
+- Gate: [ ] approved by Morgan (draft — finalized when Box 3 receipt is reviewed)
 
 Receipt (writer appends):
 - Files changed:

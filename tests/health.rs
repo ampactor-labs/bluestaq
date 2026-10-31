@@ -4,7 +4,8 @@ use tower::ServiceExt;
 
 #[tokio::test]
 async fn health_returns_ok() {
-    let app = notes::router();
+    let state = notes::AppState::in_memory();
+    let app = notes::router(state);
 
     let response = app
         .oneshot(
