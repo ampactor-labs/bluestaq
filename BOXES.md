@@ -103,7 +103,7 @@ Receipt (writer appends):
 - First action: write `src/db.rs` (SCHEMA const first).
 - Step cap: 5 (db.rs, error.rs, lib.rs edit, health.rs edit, `cargo test`).
 - Verification command: `cargo test` — expect 2 passed (health + schema unit test).
-- Gate: [ ] approved by Morgan (draft — finalized when Box 1 receipt is reviewed)
+- Gate: [*] approved by Morgan (draft — finalized when Box 1 receipt is reviewed)
 
 Receipt (writer appends):
 - Files changed: `src/db.rs` (new), `src/error.rs` (new), `src/lib.rs` (modified: `AppState` + `router(state)`), `tests/health.rs` (modified: builds `AppState::in_memory()`), and — **box gap, forced, disclosed** — `src/main.rs` (2 lines: `let state = notes::AppState::in_memory();` passed to `notes::router(state)`). The box's `router` signature change makes `main.rs` uncompilable as-is, and `cargo test` (the verification command) builds the bin target; `main.rs` is not in the box's files list. `AppState` has no file-backed constructor in this box, so `in_memory()` is the only available choice; a later box presumably switches main to a file DB.
