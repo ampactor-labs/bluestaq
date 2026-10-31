@@ -5,6 +5,7 @@ pub mod db;
 pub mod auth;
 pub mod error;
 pub mod notes;
+pub mod shares;
 pub mod teams;
 pub mod users;
 
@@ -33,6 +34,14 @@ pub fn router(state: AppState) -> axum::Router {
         .route("/notes/{id}", get(notes::get_note))
         .route("/notes/{id}", patch(notes::patch_note))
         .route("/notes/{id}", delete(notes::delete_note))
+        .route(
+            "/notes/{id}/shares",
+            axum::routing::post(shares::create_share).get(shares::list_shares),
+        )
+        .route(
+            "/notes/{id}/shares/{user_id}",
+            axum::routing::delete(shares::delete_share),
+        )
         .with_state(state)
 }
 
