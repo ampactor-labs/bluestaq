@@ -1,8 +1,10 @@
-use axum::{Json, routing::get};
+use axum::{Json, routing::{get, post}};
 use std::sync::{Arc, Mutex};
 
 pub mod db;
 pub mod error;
+pub mod teams;
+pub mod users;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -20,6 +22,11 @@ impl AppState {
 pub fn router(state: AppState) -> axum::Router {
     axum::Router::new()
         .route("/health", get(health))
+        .route("/users", post(users::create_user))
+        .route("/users/{id}", get(users::get_user))
+        .route("/teams", post(teams::create_team))
+        .route("/teams/{id}", get(teams::get_team))
+        .route("/teams/{id}/members", post(teams::add_member).get(teams::list_members))
         .with_state(state)
 }
 

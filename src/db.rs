@@ -39,6 +39,19 @@ CREATE TABLE IF NOT EXISTS note_shares (
 );
 ";
 
+pub fn is_unique(e: &rusqlite::Error) -> bool {
+    matches!(
+        e,
+        rusqlite::Error::SqliteFailure(code, _)
+            if code.code == rusqlite::ErrorCode::ConstraintViolation
+                && matches!(
+                    code.extended_code,
+                    rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE
+                        | rusqlite::ffi::SQLITE_CONSTRAINT_PRIMARYKEY
+                )
+    )
+}
+
 pub fn new_in_memory() -> Connection {
     let conn =
         Connection::open(":memory:").expect("failed to open in-memory SQLite database");

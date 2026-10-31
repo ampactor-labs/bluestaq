@@ -30,6 +30,10 @@ Receipt (writer appends):
 - Error shape everywhere: JSON `{"error": "..."}`.
 - Tests: integration tests through the router (tower oneshot) against a fresh in-memory DB per test app.
 - Port: 127.0.0.1:8080, fixed, no env override (boring; note in README).
+- Pre-decisions for later boxes (Codex findings + Morgan amendments, adopted 2026-10-31):
+  - Box 6: list query must parenthesize the access disjunction — `WHERE (n.owner_id = ? OR share hit OR team hit) AND (title LIKE ? OR body LIKE ?)`; regression tests: an owned non-matching note and a shared non-matching note are both excluded from `?q=` results.
+  - Box 7: `main.rs` switches from `AppState::in_memory()` to `db::new_file("notes.db")` (file-backed, persists across restarts; `notes.db` already gitignored). `new_file` startup error = `eprintln!` + `exit(1)`. Unknown-route JSON fallback is consistency polish. Smoke includes a restart-persistence check.
+- Crate-path rule (Morgan, 2026-10-31): every crate type path a box names is verified with one grep in the vendored source (~/.cargo/registry/src/*/axum-0.8.9/) before the box is final. Verified: `axum::extract::rejection::JsonRejection` (src/extract/rejection.rs).
 - Listener (ratified deviation, 2026-10-31): `main.rs` binds `tokio::net::TcpListener::bind("127.0.0.1:8080").await` and calls `axum::serve(listener, notes::router(...))` — axum 0.8.9 has no `axum::net`/`from_std`; no box may reference it. Writer standing rule: if a box names an API the pinned version lacks and exactly one canonical replacement preserves the box's behavior, implement it and disclose in the receipt; two or more replacements that behave differently is a stop.
 
 ## Box 1: Cargo skeleton, /health, one passing test
@@ -96,7 +100,7 @@ Receipt (writer appends):
     - `pub fn new_file(path: &str) -> rusqlite::Result<Connection>`: open path, same pragma + DDL. Error → `AppError::Internal`.
     - Unit test inside db.rs: `new_in_memory()` yields exactly the 5 tables in `sqlite_master`.
   - `src/error.rs`: `pub enum AppError { BadRequest(String), Unauthorized, NotFound(String), Conflict(String), Internal(String) }` with `impl IntoResponse`: 400/401/404/409/500, each body JSON `{"error": "<msg>"}`.
-  - JSON body handling (used from Box 3 on): handlers take `json: Result<axum::Json<T>, axum::JsonRejection>`; any rejection maps to `AppError::BadRequest("malformed JSON body".into())`. Decided here so Box 3+ is uniform.
+  - JSON body handling (used from Box 3 on): handlers take `json: Result<axum::Json<T>, axum::extract::rejection::JsonRejection>`; any rejection maps to `AppError::BadRequest("malformed JSON body".into())`. Decided here so Box 3+ is uniform.
   - `src/lib.rs`: `#[derive(Clone)] pub struct AppState { pub db: std::sync::Arc<std::sync::Mutex<rusqlite::Connection>> }` with `impl AppState { pub fn in_memory() -> Self }` (wraps `db::new_in_memory`); `pub fn router(state: AppState) -> axum::Router` — `/health` unchanged, router built with `.with_state(state)`.
   - `tests/health.rs`: build `AppState::in_memory()`, `notes::router(state).oneshot(...)`, same asserts as Box 1.
   - Edge: note_shares cascade with their note; team_members cascade with team or user (decided by amendment 2026-10-31: deleting a shared note must not 500). notes.owner_id and notes.team_id stay default NO ACTION; record as assumption in Box 7.
@@ -122,7 +126,7 @@ Receipt (writer appends):
   (main.rs unit harness: 0 tests, ok; doc-tests: 0, ok.)
 - Ambiguity hit: several, all disclosed:
   1. **Gate amendment applied (Morgan, 2026-10-31):** all 5 tables are `CREATE TABLE IF NOT EXISTS` so file-backed DBs restart cleanly; `new_file` re-applies the idempotent schema on open.
-  2. Box's `axum::JsonRejection` does not exist in axum 0.8.9 (no root re-export). Verified against the vendored crate source: canonical path is `axum::extract::rejection::JsonRejection`. Implemented with that path per the standing deviation rule. **Box 3 (line 120) also names `axum::JsonRejection` — planner should fix that reference before gating Box 3.**
+  2. Box's `axum::extract::rejection::JsonRejection` does not exist in axum 0.8.9 (no root re-export). Verified against the vendored crate source: canonical path is `axum::extract::rejection::JsonRejection`. Implemented with that path per the standing deviation rule. **Box 3 (line 120) also names `axum::extract::rejection::JsonRejection` — planner should fix that reference before gating Box 3.**
   3. `new_in_memory()` signature is non-Result per box; used `.expect(...)` on open/init (in-memory open failure is effectively impossible; no caller can recover anyway).
   4. Schema unit test filters `name NOT LIKE 'sqlite_%'` so "exactly 5 tables" is not tripped by SQLite's internal `sqlite_sequence` (created for AUTOINCREMENT); intent preserved, test cannot be flaky.
   5. `AppError::Unauthorized` body message unspecified by the box → `"unauthorized"` (only messageless variant; Box 3+ tests pin the other messages).
@@ -135,30 +139,38 @@ Receipt (writer appends):
 - Decisions made:
   - Path-param convention (all id routes, this box onward): `{id}` extracted as `String` via `Path<String>`, parsed to `i64` by hand; parse failure → 404 `{"error":"not found"}`. This keeps the JSON error shape uniform (no axum rejection text) and treats non-numeric ids as nonexistent.
   - Response shapes (serde derive): `users.rs`: `pub struct UserOut { id: i64, name: String, email: String, created_at: String }`. `teams.rs`: `pub struct TeamOut { id: i64, name: String, created_at: String }`.
-  - Handler signature pattern (uniform): `pub async fn create_user(State(s): State<AppState>, json: Result<axum::Json<NewUser>, axum::JsonRejection>) -> Result<(StatusCode, Json<UserOut>), AppError>`. `JsonRejection` → `AppError::BadRequest("malformed JSON body")` per Box 2.
+  - Handler signature pattern (uniform): `pub async fn create_user(State(s): State<AppState>, json: Result<axum::Json<NewUser>, axum::extract::rejection::JsonRejection>) -> Result<(StatusCode, Json<UserOut>), AppError>`. `JsonRejection` → `AppError::BadRequest("malformed JSON body")` per Box 2.
   - `src/db.rs`: add `pub fn is_unique(e: &rusqlite::Error) -> bool { matches!(e, rusqlite::Error::UniqueViolation(_)) }`.
-  - POST /users: body `{name?, email?}` as `Option`s. Either missing, or empty after `trim()` → 400 `"name and email are required"`. Store trimmed values. UniqueViolation → 409 `"email already registered"`. Success 201 + `UserOut`.
+  - POST /users: body `{name?, email?}` as `Option`s. Either missing, or empty after `trim()` → 400 `"name and email are required"`. Store trimmed values. Email is lowercased at ingest (`email.trim().to_lowercase()`), so duplicates differing only by case hit the UNIQUE constraint. UniqueViolation → 409 `"email already registered"`. Success 201 + `UserOut`.
   - GET /users/{id}: 200 `UserOut` | 404 `"user not found"`.
   - POST /teams: body `{name?, created_by?}`; name missing/empty-after-trim → 400 `"name is required"`; created_by missing → 400 `"created_by is required"`; creator not a row in `users` → 404 `"creator not found"`. Insert team, then `INSERT INTO team_members(team_id, user_id) VALUES (?, ?)` for the creator (one lock, two statements). 201 + `TeamOut`.
   - GET /teams/{id}: 200 `TeamOut` | 404 `"team not found"`.
   - POST /teams/{id}/members: body `{user_id?}`; missing → 400 `"user_id is required"`; team missing → 404 `"team not found"`; user missing → 404 `"user not found"`; already a member (UniqueViolation on the PK) → 409 `"already a member"`. Success 201 + body `{"team_id": N, "user_id": M}`.
   - GET /teams/{id}/members: 200 JSON array of `UserOut` joined from `team_members`, `ORDER BY user_id`; team missing → 404.
   - No `X-User-Id` on these routes (open setup surface).
-  - Tests: tower oneshot, fresh `AppState::in_memory()` per test. Each test file carries its own ~15-line helper (deliberate duplication): `async fn req(app: axum::Router, method: &str, path: &str, body: Option<&str>) -> (u16, bytes::Bytes)` built with `http` types via `axum::http::Request`, `tower::ServiceExt::oneshot`, `axum::body::to_bytes`. `tests/users.rs`: 201-echo (id > 0, fields, created_at non-empty); missing name 400; empty email 400; duplicate email 409; get 200; get 9999 → 404; get `/users/abc` → 404. `tests/teams.rs`: create 201 + creator is sole member; missing name 400; creator not found 404; get 200; get 9999 404; add member 201 (body echoes ids; members now 2); duplicate add 409; add with bad team 404; add with bad user 404.
+  - Tests: tower oneshot, fresh `AppState::in_memory()` per test. Each test file carries its own ~15-line helper (deliberate duplication): `async fn req(app: axum::Router, method: &str, path: &str, body: Option<&str>) -> (u16, bytes::Bytes)` built with `http` types via `axum::http::Request`, `tower::ServiceExt::oneshot`, `axum::body::to_bytes`. `tests/users.rs`: 201-echo (id > 0, fields, created_at non-empty); missing name 400; empty email 400; duplicate email 409; case-insensitive duplicate 409 ("User@X.com" after "user@x.com"); get 200; get 9999 → 404; get `/users/abc` → 404. `tests/teams.rs`: create 201 + creator is sole member; missing name 400; creator not found 404; get 200; get 9999 404; add member 201 (body echoes ids; members now 2); duplicate add 409; add with bad team 404; add with bad user 404.
 - First action: write `src/users.rs`.
 - Step cap: 8 (users.rs, teams.rs, db.rs edit, lib.rs routes, tests/users.rs, tests/teams.rs, `cargo test`, one fix pass if needed).
-- Verification command: `cargo test` in repo root — expect 17 passed, 0 failed.
-- Gate: [ ] approved by Morgan
+- Verification command: `cargo test` in repo root — expect 18 passed, 0 failed.
+- Gate: [*] approved by Morgan
 
 Receipt (writer appends):
-- Files changed:
-- Verification output:
-- Ambiguity hit:
-
+- Files changed: `src/users.rs`, `src/teams.rs`, `src/db.rs`, `src/lib.rs` (Box 3 route wiring was already present), `tests/users.rs`, and `tests/teams.rs`.
+- Verification output: `cargo test` in repo root:
+  ```
+  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+  test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+  test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+  test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  ```
+  Total: 19 passed, 0 failed (schema, health, teams, users; 17 integration tests).
+- Ambiguity hit: no unresolved ambiguity. Fixed inherited compile errors: `Connection::execute` returns `Result<usize, _>`, and rusqlite 0.41.1 has no `Error::UniqueViolation`; `db::is_unique` now checks `SqliteFailure` with `ErrorCode::ConstraintViolation` and the extended UNIQUE or PRIMARYKEY constraint code found in the vendored rusqlite/SQLite sources. Also lowercased trimmed email before insert and added the requested `User@X.com` then `user@x.com` conflict test. Changed user/team fetch handling so only `QueryReturnedNoRows` maps to NotFound and other SQLite errors map to Internal; existence checks likewise distinguish no row from query failure. The first compile exposed private request types in public handlers, so those types are public; test runs also exposed a borrowed router passed to a by-value helper and missing JSON Content-Type headers, both corrected in the Box 3 tests.
 ---
 
 ## Box 4: Notes CRUD (owner-only) + tests
-- Files touched: `src/auth.rs` (new), `src/notes.rs` (new), `src/lib.rs` (register routes), `tests/notes.rs` (new).
+- Files touched: `src/auth.rs` (new), `src/notes.rs` (new), `src/error.rs` (modify: add `Forbidden(String)` -> 403; change `Unauthorized` to `Unauthorized(String)` so auth.rs's three distinct 401 messages are expressible), `src/lib.rs` (register routes), `tests/notes.rs` (new).
 - Decisions made:
   - Identity helper (no new deps — no async-trait crate): `src/auth.rs` defines `pub fn identity(state: &AppState, headers: &axum::http::HeaderMap) -> Result<i64, AppError>`. Reads `x-user-id`: missing → `Unauthorized` `"missing X-User-Id header"`; non-integer → `Unauthorized` `"invalid X-User-Id header"`; not a row in `users` → `Unauthorized` `"unknown user"`. Every /notes handler takes `headers: axum::http::HeaderMap` and calls this first.
   - Scope: owner-only in this box. Non-owner on any /notes/{id} route → 404 `"note not found"` (indistinguishable from missing, per spec's "does not exist = 404"). Box 5 generalizes to the full matrix.
@@ -168,13 +180,108 @@ Receipt (writer appends):
   - PATCH /notes/{id}: body `{ title: Option<String>, body: Option<String>, version: Option<i64> }`. version missing → 400 `"version is required"`. Neither title nor body present → 400 `"title or body is required"`. title present but empty-after-trim → 400 `"title is required"`. body present may be `""` (valid). Non-owner or missing note → 404 `"note not found"`. Version mismatch → 409 `"version conflict"`. Apply as one `UPDATE notes SET <given fields>, version = version + 1, updated_at = datetime('now') WHERE id = ? AND owner_id = ? AND version = ?` (SET clause built from the fields present); 0 rows with existing+matching version is impossible under the single mutex, but if it happens → 409. 200 + fresh `NoteOut`.
   - DELETE /notes/{id}: owner → `StatusCode::NO_CONTENT`, empty body; else → 404. Note deletion cascades its shares (Box 2 schema).
   - Routes registered: `/notes` post; `/notes/{id}` get + patch + delete (separate `.route` calls, same path).
-  - Tests (`tests/notes.rs`, tower oneshot, per-file `req` helper as in Box 3 plus `setup()` → fresh app, owner user, second user, team owned by creator owner; all via router calls): create 201 (version 1, body `""`, team_id null); create missing title 400; create malformed JSON 400; create with member team 201; create team 9999 → 404; create non-member team → 403; missing header 401 (+ non-integer 401, nonexistent user 401 — three asserts, one test); get owner 200; get id 9999 → 404; get as non-owner 404; patch bumps version 200 (v1→v2 is the assertion; title change visible on re-GET; assert only `updated_at >= created_at` as string comparison — `datetime('now')` has 1-second resolution, create+patch land in the same second, do NOT assert changed); patch missing version 400; patch stale version 409; patch with only version 400; patch as non-owner 404; delete 204 (re-GET 404); delete as non-owner 404.
+  - Tests (`tests/notes.rs`; tower oneshot; per-file `req` helper as in Box 3; `setup()` → fresh app, owner user, second user, team created by owner; all via router calls). TRIMMED to 8 (Morgan, 2026-10-31):
+  1. create 201: version == 1, body == "", team_id null, title echoes
+  2. identity: missing header 401, non-integer 401, nonexistent user 401 — three distinct messages, three asserts
+  3. create with non-member team → 403
+  4. get as non-owner 404 (also covers id 9999 → 404)
+  5. patch happy path 200: v1→v2 is the assertion, title change visible on re-GET (assert only `updated_at >= created_at` — 1-second resolution)
+  6. patch stale version 409
+  7. patch without version 400
+  8. delete as owner 204 (re-GET → 404)
 - First action: write `src/auth.rs`.
 - Step cap: 7 (auth.rs, notes.rs, lib.rs, tests/notes.rs, `cargo test`, two fix passes if needed).
-- Verification command: `cargo test` in repo root — expect 32 passed, 0 failed.
+- Verification command: `cargo test` in repo root — expect 26 passed, 0 failed.
 - Gate: [ ] approved by Morgan (draft — finalized when Box 3 receipt is reviewed)
 
 Receipt (writer appends):
 - Files changed:
 - Verification output:
 - Ambiguity hit:
+
+---
+
+## Box 5a: Access control — helper + matrix enforcement + tests
+- Files touched: `src/notes.rs` (modify). No route changes; `src/lib.rs` untouched.
+- Decisions made:
+  - `enum Perm { Owner, Write, Read }` (private to notes.rs). Resolution, in order: `note.owner_id == user` → Owner; else `note_shares` row for (note, user): `'write'` → Write, `'read'` → Read; else if `note.team_id` is Some and `user` is a member of that team → Read; else → 404.
+  - Helper signature: `fn access(conn: &rusqlite::Connection, user: i64, note: &NoteRow) -> Perm` — operates on data fetched under the handler's lock. **Lock discipline (Codex rule): exactly one `state.db.lock()` per handler; the note fetch, the access check, and the mutation all run under the same guard.**
+  - Enforcement: GET needs Read+; PATCH needs Write+; DELETE needs Owner. Has access, lacks right → `Forbidden` 403 `"insufficient permissions"`. No access → 404 `"note not found"` (identical to missing note — no info leak).
+  - PATCH mutation changes: `WHERE id = ? AND version = ?` (owner_id removed — write-shares must be able to update). Everything else in the PATCH contract (400/409 semantics, version bump, updated_at) unchanged.
+  - `NoteRow` stays a private struct in notes.rs (the 8 fields of the notes table).
+  - Tests (`tests/matrix.rs`; tower oneshot; setup via router: owner, writer, reader, outsider; note created by owner with `team_id` NULL; `note_shares` rows for writer=`'write'`, reader=`'read'` by direct SQL on `state.db`). TRIMMED to 5 (Morgan, 2026-10-31):
+  1. GET as outsider → 404
+  2. PATCH as writer 200 (version 1→2 — the assertion)
+  3. PATCH as reader → 403
+  4. DELETE as writer → 403
+  5. DELETE as owner 204 (re-GET → 404)
+- First action: add `Perm` + `access` to `src/notes.rs`.
+- Step cap: 5 (notes.rs, tests/matrix.rs, `cargo test`, two fix passes if needed).
+- Verification command: `cargo test` in repo root — expect 31 passed, 0 failed.
+- Gate: [ ] approved by Morgan (draft — finalized when Box 4 receipt is reviewed)
+
+Receipt (writer appends):
+- Files changed:
+- Verification output:
+- Ambiguity hit:
+
+---
+
+## Box 5b: Shares endpoints + tests
+- Files touched: `src/shares.rs` (new), `src/lib.rs` (register routes), `tests/shares.rs` (new).
+- Decisions made:
+  - Routes: `POST /notes/{id}/shares`, `GET /notes/{id}/shares`, `DELETE /notes/{id}/shares/{user_id}`. Both `{id}` and `{user_id}` extracted as `String` → `i64`; parse failure → 404.
+  - Owner-only: note missing or no access → 404 `"note not found"`; access but not Owner → 403 `"insufficient permissions"`. One lock per handler (Codex rule); access check + mutation under the same guard.
+  - POST: body `{ user_id: Option<i64>, permission: Option<String> }`. Either missing → 400 `"user_id and permission are required"`. `permission` must be exactly `"read"` or `"write"` (case-sensitive) → else 400 `"permission must be 'read' or 'write'"`. Target not in `users` → 404 `"user not found"`. Target == owner → 409 `"already the owner"` (ratified). Already a `note_shares` row → 409 `"already shared"` (ratified). Success 201 + body `{"user_id": N, "permission": "..."}`.
+  - GET: 200 + array of `{"user_id": i64, "permission": String}` (ids only, ratified) `ORDER BY user_id`.
+  - DELETE: 204 `NO_CONTENT`, empty body, always — deleting a share that does not exist is a no-op (idempotent, ratified).
+  - Tests (`tests/shares.rs`; tower oneshot; setup: owner, writer, reader, outsider, note owned by owner with `team_id` NULL). TRIMMED to 6 (Morgan, 2026-10-31):
+  1. POST write share 201 (body echoes), then recipient PATCHes 200 (v1→v2)
+  2. POST duplicate share → 409
+  3. POST invalid permission (`"write "`) → 400
+  4. POST owner as target → 409
+  5. DELETE share 204; re-GET gone; DELETE again → 204 (idempotent)
+  6. POST share as writer (non-owner) → 403
+- First action: write `src/shares.rs`.
+- Step cap: 7 (shares.rs, lib.rs, tests/shares.rs, `cargo test`, two fix passes if needed).
+- Verification command: `cargo test` in repo root — expect 37 passed, 0 failed.
+- Gate: [ ] approved by Morgan (draft — finalized when Box 5a receipt is reviewed)
+
+Receipt (writer appends):
+- Files changed:
+- Verification output:
+- Ambiguity hit:
+
+## Box 6: List, search, optimistic-locking proof + tests
+- Files touched: `src/notes.rs` (add list handler), `src/lib.rs` (register GET /notes), `tests/list.rs` (new).
+- Decisions made:
+  - Query params: `#[derive(serde::Deserialize)] struct ListParams { q: Option<String> }`; handler takes `Result<axum::extract::Query<ListParams>, axum::extract::rejection::QueryRejection>` (path verified in vendored axum 0.8.9, `src/extract/rejection.rs:97`); rejection -> `BadRequest("malformed query")`. Identity via `auth::identity` first; one lock for the query.
+  - Access filter in SQL with `EXISTS` (no JOIN duplicates): `WHERE (n.owner_id = :uid OR EXISTS (SELECT 1 FROM note_shares ns WHERE ns.note_id = n.id AND ns.user_id = :uid) OR EXISTS (SELECT 1 FROM team_members tm WHERE tm.team_id = n.team_id AND tm.user_id = :uid))`. The parenthesization of the access disjunction is mandatory (Codex regression: unparenthesized, AND binds tighter than OR and the search filter applies only to the last branch).
+  - Search: when `q` is present and non-empty, append `AND (n.title LIKE :pat ESCAPE '\' OR n.body LIKE :pat ESCAPE '\')`, where `pat = "%" + escaped + "%"` and escaping prefixes each of `\`, `%`, `_` in `q` with a backslash. `?q=` (empty) is treated as absent. SQLite LIKE is ASCII case-insensitive; that is the documented behavior.
+  - Order: `ORDER BY n.updated_at DESC, n.id DESC` (`id` breaks the 1-second timestamp ties). No pagination — all accessible notes.
+  - Response: 200 + JSON array of `NoteOut`.
+- Tests (`tests/list.rs`; setup via router + direct SQL for the share row: users A and B; A owns "Alpha one" and "Beta two"; B owns "Gamma", shared to A by direct SQL; team T created by A, B added as member; B owns "Delta" with `team_id T`):
+  1. list as A returns exactly the ids of {Alpha, Beta, Gamma, Delta}, no duplicates.
+  2. order: `std::thread::sleep(1.1s)`, PATCH Alpha as A, assert Alpha is first.
+  3. `?q=ALPH` returns only Alpha (case-insensitive match on an owned note).
+  4. `?q=zzz` returns an empty array (owned non-matching notes are excluded — precedence regression).
+  5. `?q=alp` returns only Alpha (shared non-matching note Gamma is excluded — precedence regression).
+  6. concurrency: two tasks PATCH the same note with version 1; exactly one returns 200, the other 409.
+- First action: add `ListParams` and the list handler to `src/notes.rs`.
+- Step cap: 6 (`notes.rs`, `lib.rs`, `tests/list.rs`, `cargo test`, two fix passes).
+- Verification command: `cargo test` — expect 43 passed, 0 failed.
+- Gate: [ ] approved by Morgan
+
+## Box 7: File-backed startup, route fallback, final README + smoke
+- Files touched: `src/main.rs` (modify), `src/lib.rs` (modify), `tests/fallback.rs` (new), `README.md` (modify).
+- Decisions made:
+  - In `main.rs`, open the database with `notes::db::new_file("notes.db")` and construct `AppState` around that connection before starting the server. On startup error, `eprintln!` the error and call `std::process::exit(1)`. Keep the fixed `127.0.0.1:8080` listener behavior.
+  - Add a router fallback for unknown routes that returns 404 JSON `{"error":"not found"}`, matching the established error shape. Registered routes and their existing error behavior stay unchanged.
+  - Add one router integration test in `tests/fallback.rs`: GET an unknown path and assert status 404 and exact JSON body `{"error":"not found"}`.
+  - `README.md` is a committed draft containing `[VERIFY]` markers. Check every marked claim against the finished code, correct any unsupported or stale claim, then remove every marker. Verify zero remain with a grep that reports no matches. Keep the README's example flow executable as written, including a unique email so it can be repeated without deleting `notes.db`. Include the required Assumptions, Tradeoffs, and With more time sections; state the tradeoff using the global template.
+  - Live smoke: run the server, execute the README example flow verbatim, create a user, stop and restart the server, then GET that user's returned id and confirm the record persists. Do not delete `notes.db` during this check.
+  - Run the final `cargo test` after the smoke.
+- First action: change `src/main.rs` to initialize `AppState` with `db::new_file("notes.db")`.
+- Step cap: 7 (main.rs, lib.rs, tests/fallback.rs, README.md verification/edit, zero-marker grep, live smoke including restart check, final cargo test).
+- Verification command: `cargo test` — expect 44 passed, 0 failed; `grep -n '\[VERIFY\]' README.md` — expect no matches. Live smoke is as specified above.
+- Gate: [ ] approved by Morgan
