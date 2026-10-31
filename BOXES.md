@@ -390,3 +390,26 @@ Receipt (writer appends):
   ```
   Total: 56 passed, 0 failed.
 - Ambiguity hit: repository search found an additional member-add setup call in `tests/list.rs`; it now supplies the team creator as actor. No policy ambiguity remained.
+
+## Box 7.2: Propagate access-query failures
+
+Receipt (writer appends):
+- Files changed: `src/notes.rs` (implementation only) and `BOXES.md` (this receipt). `access()` now returns `Result<Option<Perm>, AppError>`; share and membership query failures map to `AppError::Internal`. GET, PATCH, and DELETE preserve 404 for `Ok(None)` and propagate `Err`.
+- Verification output: the first `cargo test` attempt compiled cleanly and passed:
+  ```
+  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.11s
+  test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+  test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+  test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+  test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+  test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+  test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+  test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  ```
+  Total: 56 passed, 0 failed.
+- Ambiguity hit: none. Existing error mapping sends these rusqlite query errors to 500; no tests were added.

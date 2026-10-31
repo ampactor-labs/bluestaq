@@ -55,41 +55,43 @@ struct NoteRow {
     updated_at: String,
 }
 
-fn access(conn: &rusqlite::Connection, user: i64, note: &NoteRow) -> Option<Perm> {
+fn access(
+    conn: &rusqlite::Connection,
+    user: i64,
+    note: &NoteRow,
+) -> Result<Option<Perm>, AppError> {
     if note.owner_id == user {
-        return Some(Perm::Owner);
+        return Ok(Some(Perm::Owner));
     }
 
-    let share: Option<String> = match conn
+    let share: Option<String> = conn
         .query_row(
             "SELECT permission FROM note_shares WHERE note_id = ?1 AND user_id = ?2",
             params![note.id, user],
             |row| row.get(0),
         )
         .optional()
-    {
-        Ok(share) => share,
-        Err(_) => return None,
-    };
+        .map_err(|error| AppError::Internal(error.to_string()))?;
     match share.as_deref() {
-        Some("write") => return Some(Perm::Write),
-        Some("read") => return Some(Perm::Read),
-        Some(_) => return None,
+        Some("write") => return Ok(Some(Perm::Write)),
+        Some("read") => return Ok(Some(Perm::Read)),
+        Some(_) => return Ok(None),
         None => {}
     }
 
-    let team_id = note.team_id?;
-    let is_member: bool = match conn.query_row(
-        "SELECT EXISTS(
-            SELECT 1 FROM team_members WHERE team_id = ?1 AND user_id = ?2
-         )",
-        params![team_id, user],
-        |row| row.get(0),
-    ) {
-        Ok(is_member) => is_member,
-        Err(_) => return None,
+    let Some(team_id) = note.team_id else {
+        return Ok(None);
     };
-    is_member.then_some(Perm::Read)
+    let is_member: bool = conn
+        .query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM team_members WHERE team_id = ?1 AND user_id = ?2
+             )",
+            params![team_id, user],
+            |row| row.get(0),
+        )
+        .map_err(|error| AppError::Internal(error.to_string()))?;
+    Ok(is_member.then_some(Perm::Read))
 }
 
 fn permits(actual: Perm, required: Perm) -> bool {
@@ -296,8 +298,8 @@ pub async fn get_note(
     let user_id = identity(&conn, &headers)?;
     let id = users::parse_id(&id_str)?;
     let note = note_row(&conn, id).map_err(note_error)?;
-    let permission =
-        access(&conn, user_id, &note).ok_or_else(|| AppError::NotFound("note not found".into()))?;
+    let permission = access(&conn, user_id, &note)?
+        .ok_or_else(|| AppError::NotFound("note not found".into()))?;
     debug_assert!(permits(permission, Perm::Read));
     Ok(Json(note.into()))
 }
@@ -332,7 +334,7 @@ pub async fn patch_note(
     };
 
     let current = note_row(&conn, id).map_err(note_error)?;
-    let permission = access(&conn, user_id, &current)
+    let permission = access(&conn, user_id, &current)?
         .ok_or_else(|| AppError::NotFound("note not found".into()))?;
     if !permits(permission, Perm::Write) {
         return Err(AppError::Forbidden("insufficient permissions".into()));
@@ -377,8 +379,8 @@ pub async fn delete_note(
     let user_id = identity(&conn, &headers)?;
     let id = users::parse_id(&id_str)?;
     let note = note_row(&conn, id).map_err(note_error)?;
-    let permission =
-        access(&conn, user_id, &note).ok_or_else(|| AppError::NotFound("note not found".into()))?;
+    let permission = access(&conn, user_id, &note)?
+        .ok_or_else(|| AppError::NotFound("note not found".into()))?;
     if !matches!(permission, Perm::Owner) {
         return Err(AppError::Forbidden("insufficient permissions".into()));
     }
