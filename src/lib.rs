@@ -1,4 +1,4 @@
-use axum::{Json, routing::{delete, get, patch, post}};
+use axum::{http::StatusCode, Json, routing::{delete, get, patch, post}};
 use std::sync::{Arc, Mutex};
 
 pub mod db;
@@ -42,7 +42,15 @@ pub fn router(state: AppState) -> axum::Router {
             "/notes/{id}/shares/{user_id}",
             axum::routing::delete(shares::delete_share),
         )
+        .fallback(fallback_json)
         .with_state(state)
+}
+
+async fn fallback_json() -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({ "error": "not found" })),
+    )
 }
 
 pub(crate) async fn health() -> Json<serde_json::Value> {
