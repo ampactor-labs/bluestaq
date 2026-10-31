@@ -1,2 +1,6 @@
 /target
 *.db
+
+__pycache__/
+smoke_test.py
+.opencode/
