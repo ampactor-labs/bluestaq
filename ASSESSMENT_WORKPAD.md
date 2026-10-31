@@ -1,32 +1,25 @@
-# Assessment Workpad & Cockpit
+# Assessment Workpad
 
-> **Candidate**: Morgan Espitia  
-> **Role**: Senior Software Engineer, Bluestaq  
-> **Target Platform**: TestGorilla (180 Minutes, 1 Question)  
-> **Started At**: `[TBD: e.g. 21:05 MDT]`  
-> **Submission Deadline**: `[TBD: Started At + 3h]`
+Use this document to plan a time-boxed engineering assessment and record the method used. Treat the submitted prompt as the source of truth. Remove unused notes and verify the final artifacts before sharing.
 
-> **Tandem roster (added 2026-10-31)**: PLANNER is Qwen3.8-27B in Build mode restricted by rule to one writable file, BOXES.md (OpenCode Plan mode cannot write repo files); it writes boxes and reviews diffs. WRITER is a second, fresh Qwen3.8-27B session in Build mode (the 8B failed the writer audition on 2026-10-31 and is sidecar-only); it implements one gated box at a time and appends its receipt under the box. Morgan gates every box and owns all submissions. Loni (chat) is the fast second brain for triage and the final review pass. Rhythm: while the writer implements box n, the planner drafts box n+1; review happens at the seam between boxes, not in one pass at the end.
+## 1. Time Budget and Milestones
 
----
+This schedule allocates a 180-minute work budget. Adjust it only if the prompt specifies a different limit.
 
-## 1. Time Budget & Milestone Log
+| Phase | Window | Target milestone |
+| :--- | :--- | :--- |
+| 1. Triage and framing | 00:00–00:15 | Read the prompt twice, identify constraints, state assumptions, choose an initial scope. |
+| 2. Walking skeleton | 00:15–00:45 | Get one end-to-end slice and one automated check working. |
+| 3. Core implementation | 00:45–01:25 | Implement the core behavior and tests for its main rules. |
+| 4. Error paths and edges | 01:25–02:00 | Cover validation, boundaries, malformed input, and error classification. |
+| 5. Integration and robustness | 02:00–02:30 | Verify integration behavior, concurrency, and high-risk edge cases. |
+| 6. Write-up and packaging | 02:30–03:00 | Finish the README, verify claims, review the diff, and prepare the repository. |
 
-| Phase | Window | Target Milestone | Status / Timestamp |
-| :--- | :--- | :--- | :--- |
-| **01. Triage & Framing** | `00:00 - 00:15` | Read prompt twice. Fill Prompt & Deliverable Constraints. State assumptions. Pick language & architecture. | `[ ]` |
-| **02. Walking Skeleton** | `00:15 - 00:45` | Smallest complete end-to-end slice working. Core types & entry point. First automated test passing. | `[ ]` |
-| **03. Core Implementation** | `00:45 - 01:25` | Complete core domain logic. Unit tests for happy path & core business rules. | `[ ]` |
-| **04. Error Paths & Edges** | `01:25 - 02:00` | Input validation, boundary values, malformed data handling, error classification, logging/correlation IDs. | `[ ]` |
-| **05. Integration & Robustness** | `02:00 - 02:30` | End-to-end tests, stress/concurrency/boundary scenarios, edge cases caught. | `[ ]` |
-| **06. Final Write-Up & Packaging** | `02:30 - 03:00` | Complete Assumptions, Tradeoffs, "With more time". Package deliverable (zip/git/text) & verify against rubric. | `[ ]` |
+## 2. Prompt and Constraints
 
----
+### The prompt
 
-## 2. Prompt & Constraints (Raw Copy-Paste)
-
-### The Prompt
-```text
+~~~text
 ➡️ YOU CAN USE AI FOR THIS CHALLENGE!
 Not all Bluestaq assessments allow AI use, but given this coding challenge's difficulty level and the time limit, we encourage you to use any tools or resources at your disposal, including AI tools.
 
@@ -45,94 +38,55 @@ Include:
   • 2–3 design choices you spent the most time on, and why you made them
   • What you'd change, add, or stop doing if you had more time
 • Your commit history
-```
+~~~
 
-### Deliverable Format & Rules
-- **Submission mechanism**: `[In-browser code / Git repo / Zip file / Architecture essay / Text box]`
-- **Evaluation criteria / provided tests**: `[None / Unit test suite to satisfy / Performance benchmark]`
-- **Dependencies / runtime limits**: `[Standard library only / Specific packages allowed / Offline / Network allowed]`
+### Constraints to extract
 
----
+Before implementation, identify the requested deliverable, evaluation criteria or supplied tests, runtime limits, and dependency constraints. Use only information stated in the prompt.
 
 ## 3. Assumptions Log
-*Record each assumption as a single line as soon as an ambiguity is encountered:*
-1. `Assumption 1: ...`
-2. `Assumption 2: ...`
 
----
+For each important ambiguity, record one concise assumption and proceed on it unless the answer would change the design materially. Keep facts and assumptions distinct.
 
-## 4. Architecture & Data Boundaries
+## 4. Architecture and Data Boundaries
 
-- **Chosen Language**: `[Rust / Python / TS]` — *Justification: ...*
-- **Data Ownership / Module Boundaries**:
-  - `Module A`: owns ...
-  - `Module B`: owns ...
-- **Core Interfaces / Types**:
-  - ...
+Record the chosen language and why it fits the prompt. Define which module owns each kind of data and behavior. Name the core interfaces and invariants that need to remain true.
 
----
+## 5. Explicit Tradeoffs
 
-## 5. Explicit Tradeoffs (Rubric Formula)
+For each major decision, record:
 
-> Template:  
-> *"Given [constraint], I chose [X] over [Y]. What it buys: [benefit]. What it costs: [cost]. That cost is acceptable because [reason]. I would revisit if [trigger]."*
+- The constraint that drove the choice.
+- The selected option and the alternative.
+- What the choice buys and what it costs.
+- Why the cost is acceptable under the current constraint.
+- What would trigger revisiting the decision.
 
-### Tradeoff 1: Architecture / Data Model
-- **Given**: 
-- **I chose**: 
-- **Over**: 
-- **What it buys**: 
-- **What it costs**: 
-- **Why acceptable**: 
-- **Revisit trigger**: 
+## 6. Testing Matrix
 
-### Tradeoff 2: Concurrency / Storage / Algorithmic
-- **Given**: 
-- **I chose**: 
-- **Over**: 
-- **What it buys**: 
-- **What it costs**: 
-- **Why acceptable**: 
-- **Revisit trigger**: 
+Identify tests at the lowest level that catches each likely bug class.
 
----
+| Category | Coverage to consider | Bug class |
+| :--- | :--- | :--- |
+| Happy path | One representative valid flow | Incorrect normal behavior |
+| Boundary | Empty, single item, and upper-limit inputs | Off-by-one and limit errors |
+| Error path | Malformed input and invalid types | Parsing and validation errors |
+| Conflict | Duplicate keys and concurrent updates | Lost updates and uniqueness errors |
+| Recovery | Repeated operations and safe failure | Duplicate effects and inconsistent state |
 
-## 6. Testing Matrix (Arrange / Act / Assert)
+## 7. Production Mindset
 
-| Category | Test Case | Target Bug Class / Scenario | Status |
-| :--- | :--- | :--- | :--- |
-| **Happy Path** | `test_nominal_flow` | Standard valid input produces expected output | `[ ]` |
-| **Boundary** | `test_empty_input` | Empty dataset / zero-length inputs | `[ ]` |
-| **Boundary** | `test_single_item` | Single item / off-by-one fencepost checks | `[ ]` |
-| **Boundary** | `test_max_capacity` | Large / saturation limit / overflow bounds | `[ ]` |
-| **Error Path** | `test_malformed_input` | Schema mismatch, invalid types, corrupted payload | `[ ]` |
-| **Error Path** | `test_duplicate_or_conflict`| Duplicate keys, idempotency violations, concurrent update | `[ ]` |
-| **Production** | `test_idempotency_or_recovery` | Repeated calls yield identical state; safe failure | `[ ]` |
+Review operational context and request or object identifiers in logs. Separate input parsing from domain validation. Distinguish client errors from internal failures. Confirm that invalid input reaches a clear error response rather than a panic.
 
----
+## 8. With More Time
 
-## 7. Production Mindset & Operational Readiness
+Record only work deferred after the requested scope is complete. For each item, explain the constraint that deferred it and the condition that would justify revisiting it.
 
-- [ ] **Observability**: Structured log events with operational context (correlation / request ID, object ID).
-- [ ] **Data Integrity**: Input sanitization and domain validation separated from parsing.
-- [ ] **Error Semantics**: Differentiated error types (client/validation error vs internal/system fault).
-- [ ] **Graceful Degradation**: Clear failure messages; no panics/unhandled exceptions on bad input.
+## 9. Final Submission Pass
 
----
-
-## 8. "With More Time" (Record as you go)
-*Capture ideas and optimizations here immediately so you don't lose time implementing them now:*
-1. 
-2. 
-3. 
-
----
-
-## 9. Final Submission Checklist
-
-- [ ] Does the solution strictly answer what was asked in the prompt?
-- [ ] Are all test cases passing cleanly?
-- [ ] Does the code have clean documentation and zero leftover debug prints/scratch code?
-- [ ] Is the tradeoff template completed and clear?
-- [ ] Are the 3 required wrap-up sections present: **Assumptions**, **Tradeoffs**, and **With More Time**?
-- [ ] Zero unverified claims or defense/clearance implications?
+1. Re-read the prompt and verify that the deliverable answers it.
+2. Run the relevant tests and report their actual results.
+3. Review error paths, documentation, and any live example flow.
+4. Remove scratch files and debug output that are not part of the deliverable.
+5. State assumptions and tradeoffs clearly, including their costs.
+6. Remove unverified claims and ensure credentials or experience are represented accurately.
