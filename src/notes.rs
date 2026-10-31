@@ -1,4 +1,4 @@
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use rusqlite::{params, OptionalExtension};
@@ -19,6 +19,11 @@ pub struct PatchNote {
     title: Option<String>,
     body: Option<String>,
     version: Option<i64>,
+}
+
+#[derive(serde::Deserialize)]
+pub struct ListParams {
+    q: Option<String>,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -133,6 +138,79 @@ fn note_error(error: rusqlite::Error) -> AppError {
     match error {
         rusqlite::Error::QueryReturnedNoRows => AppError::NotFound("note not found".into()),
         other => AppError::Internal(other.to_string()),
+    }
+}
+
+fn escape_like(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        if matches!(ch, '\\' | '%' | '_') {
+            escaped.push('\\');
+        }
+        escaped.push(ch);
+    }
+    escaped
+}
+
+fn list_rows(
+    conn: &rusqlite::Connection,
+    user_id: i64,
+    pattern: Option<&str>,
+) -> rusqlite::Result<Vec<NoteOut>> {
+    match pattern {
+        Some(pattern) => {
+            let mut stmt = conn.prepare(
+                r#"SELECT n.id, n.owner_id, n.team_id, n.title, n.body, n.version,
+                          n.created_at, n.updated_at
+                   FROM notes n
+                   WHERE (n.owner_id = ?1
+                      OR EXISTS (SELECT 1 FROM note_shares ns
+                                 WHERE ns.note_id = n.id AND ns.user_id = ?1)
+                      OR EXISTS (SELECT 1 FROM team_members tm
+                                 WHERE tm.team_id = n.team_id AND tm.user_id = ?1))
+                     AND (n.title LIKE ?2 ESCAPE '\' OR n.body LIKE ?2 ESCAPE '\')
+                   ORDER BY n.updated_at DESC, n.id DESC"#,
+            )?;
+            let rows = stmt.query_map(params![user_id, pattern], |row| {
+                Ok(NoteOut {
+                    id: row.get(0)?,
+                    owner_id: row.get(1)?,
+                    team_id: row.get(2)?,
+                    title: row.get(3)?,
+                    body: row.get(4)?,
+                    version: row.get(5)?,
+                    created_at: row.get(6)?,
+                    updated_at: row.get(7)?,
+                })
+            })?;
+            rows.collect()
+        }
+        None => {
+            let mut stmt = conn.prepare(
+                r#"SELECT n.id, n.owner_id, n.team_id, n.title, n.body, n.version,
+                          n.created_at, n.updated_at
+                   FROM notes n
+                   WHERE (n.owner_id = ?1
+                      OR EXISTS (SELECT 1 FROM note_shares ns
+                                 WHERE ns.note_id = n.id AND ns.user_id = ?1)
+                      OR EXISTS (SELECT 1 FROM team_members tm
+                                 WHERE tm.team_id = n.team_id AND tm.user_id = ?1))
+                   ORDER BY n.updated_at DESC, n.id DESC"#,
+            )?;
+            let rows = stmt.query_map([user_id], |row| {
+                Ok(NoteOut {
+                    id: row.get(0)?,
+                    owner_id: row.get(1)?,
+                    team_id: row.get(2)?,
+                    title: row.get(3)?,
+                    body: row.get(4)?,
+                    version: row.get(5)?,
+                    created_at: row.get(6)?,
+                    updated_at: row.get(7)?,
+                })
+            })?;
+            rows.collect()
+        }
     }
 }
 
@@ -310,4 +388,21 @@ pub async fn delete_note(
     )
     .map_err(|e| AppError::Internal(e.to_string()))?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn list_notes(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    query: Result<Query<ListParams>, axum::extract::rejection::QueryRejection>,
+) -> Result<Json<Vec<NoteOut>>, AppError> {
+    let conn = state.db.lock().unwrap();
+    let user_id = identity(&conn, &headers)?;
+    let Query(ListParams { q }) =
+        query.map_err(|_| AppError::BadRequest("malformed query".into()))?;
+    let pattern = q
+        .filter(|value| !value.is_empty())
+        .map(|value| format!("%{}%", escape_like(&value)));
+    let notes = list_rows(&conn, user_id, pattern.as_deref())
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+    Ok(Json(notes))
 }

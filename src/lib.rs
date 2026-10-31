@@ -29,7 +29,7 @@ pub fn router(state: AppState) -> axum::Router {
         .route("/teams", post(teams::create_team))
         .route("/teams/{id}", get(teams::get_team))
         .route("/teams/{id}/members", post(teams::add_member).get(teams::list_members))
-        .route("/notes", post(notes::create_note))
+        .route("/notes", post(notes::create_note).get(notes::list_notes))
         .route("/notes/{id}", get(notes::get_note))
         .route("/notes/{id}", patch(notes::patch_note))
         .route("/notes/{id}", delete(notes::delete_note))

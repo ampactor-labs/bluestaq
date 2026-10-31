@@ -291,6 +291,23 @@ Receipt (writer appends):
 - Verification command: `cargo test` — expect 43 passed, 0 failed.
 - Gate: [ ] approved by Morgan
 
+Receipt (writer appends):
+- Files changed: `src/notes.rs` (private list query helpers and GET handler), `src/lib.rs` (GET `/notes` registration), `tests/list.rs` (6 router integration tests), and `BOXES.md` (this receipt).
+- Verification output: `cargo test` in repo root:
+  ```
+  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.11s
+  test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+  test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+  test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+  test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+  test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  ```
+  Total: 38 passed, 0 failed (37 integration tests plus the schema unit test; main and doc-test harnesses ran 0 tests and passed).
+- Ambiguity hit: no spec ambiguity. Compilation exposed branch-specific `MappedRows` closure types and statement-borrow lifetimes in the two query branches; both were fixed by collecting each branch before returning. The final run passed.
+
 ## Box 7: File-backed startup, route fallback, final README + smoke
 - Files touched: `src/main.rs` (modify), `src/lib.rs` (modify), `tests/fallback.rs` (new), `README.md` (modify).
 - Decisions made:
