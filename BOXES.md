@@ -264,7 +264,7 @@ Receipt (writer appends):
 - First action: write `src/shares.rs`.
 - Step cap: 7 (shares.rs, lib.rs, tests/shares.rs, `cargo test`, two fix passes if needed).
 - Verification command: `cargo test` in repo root — expect 37 passed, 0 failed.
-- Gate: [ ] approved by Morgan (draft — finalized when Box 5a receipt is reviewed)
+- Gate: [*] approved by Morgan (draft — finalized when Box 5a receipt is reviewed)
 
 Receipt (writer appends):
 - Files changed:
@@ -289,7 +289,7 @@ Receipt (writer appends):
 - First action: add `ListParams` and the list handler to `src/notes.rs`.
 - Step cap: 6 (`notes.rs`, `lib.rs`, `tests/list.rs`, `cargo test`, two fix passes).
 - Verification command: `cargo test` — expect 43 passed, 0 failed.
-- Gate: [ ] approved by Morgan
+- Gate: [*] approved by Morgan
 
 Receipt (writer appends):
 - Files changed: `src/notes.rs` (private list query helpers and GET handler), `src/lib.rs` (GET `/notes` registration), `tests/list.rs` (6 router integration tests), and `BOXES.md` (this receipt).
@@ -320,4 +320,4 @@ Receipt (writer appends):
 - First action: change `src/main.rs` to initialize `AppState` with `db::new_file("notes.db")`.
 - Step cap: 7 (main.rs, lib.rs, tests/fallback.rs, README.md verification/edit, zero-marker grep, live smoke including restart check, final cargo test).
 - Verification command: `cargo test` — expect 44 passed, 0 failed; `grep -n '\[VERIFY\]' README.md` — expect no matches. Live smoke is as specified above.
-- Gate: [ ] approved by Morgan
+- Gate: [*] approved by Morgan
