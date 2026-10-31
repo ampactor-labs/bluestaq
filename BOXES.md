@@ -192,13 +192,22 @@ Receipt (writer appends):
 - First action: write `src/auth.rs`.
 - Step cap: 7 (auth.rs, notes.rs, lib.rs, tests/notes.rs, `cargo test`, two fix passes if needed).
 - Verification command: `cargo test` in repo root — expect 26 passed, 0 failed.
-- Gate: [ ] approved by Morgan (draft — finalized when Box 3 receipt is reviewed)
+- Gate: [*] approved by Morgan (draft — finalized when Box 3 receipt is reviewed)
 
 Receipt (writer appends):
-- Files changed:
-- Verification output:
-- Ambiguity hit:
-
+- Files changed: `src/auth.rs` (new identity helper), `src/notes.rs` (new owner-only CRUD handlers), `src/error.rs` (`Forbidden(String)` and message-bearing `Unauthorized(String)`), `src/lib.rs` (notes routes), and `tests/notes.rs` (exactly 8 tests).
+- Verification output: `cargo test` in repo root:
+  ```
+  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+  test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+  test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+  test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  ```
+  Total: 27 passed, 0 failed (26 integration tests plus the schema unit test; main and doc-test harnesses ran 0 tests and passed).
+- Ambiguity hit: no unresolved implementation ambiguity. The expected total of 26 conflicts with the Box 3 baseline recorded immediately above: it has 19 passing tests (18 integration plus 1 schema unit), and this box adds exactly 8, so Cargo reports 27. The actual output governs. Request body types are public because Axum public handlers expose them to the router; their fields remain private.
 ---
 
 ## Box 5a: Access control — helper + matrix enforcement + tests

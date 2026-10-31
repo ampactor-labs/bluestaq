@@ -1,8 +1,10 @@
-use axum::{Json, routing::{get, post}};
+use axum::{Json, routing::{delete, get, patch, post}};
 use std::sync::{Arc, Mutex};
 
 pub mod db;
+pub mod auth;
 pub mod error;
+pub mod notes;
 pub mod teams;
 pub mod users;
 
@@ -27,6 +29,10 @@ pub fn router(state: AppState) -> axum::Router {
         .route("/teams", post(teams::create_team))
         .route("/teams/{id}", get(teams::get_team))
         .route("/teams/{id}/members", post(teams::add_member).get(teams::list_members))
+        .route("/notes", post(notes::create_note))
+        .route("/notes/{id}", get(notes::get_note))
+        .route("/notes/{id}", patch(notes::patch_note))
+        .route("/notes/{id}", delete(notes::delete_note))
         .with_state(state)
 }
 
