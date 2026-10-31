@@ -341,3 +341,52 @@ Receipt (writer appends):
   ```
   Total: 47 passed, 0 failed (46 existing tests plus the fallback integration test). `grep -n '\[VERIFY\]' README.md` returned no matches. The live README flow completed; its three expected responses were 404, 403, and 409. After stopping and restarting the server, GET on the printed owner ID returned 200 with the persisted user record.
 - Ambiguity hit: none. The Box 7 expected count was stale against the merged 46-test baseline; the actual final count is 47.
+
+## Box 8: Persistence and search edge coverage (Writer C)
+- Files touched: `tests/persistence.rs` (new), `tests/search_edges.rs` (new), `BOXES.md` (this box and receipt). `src/db.rs` and `src/notes.rs` are frozen.
+- Decisions made:
+  - Use only the Rust standard library for unique temporary file paths and cleanup: `std::env::temp_dir`, process ID, current time, an atomic counter, and a small `Drop` guard. No dependency changes.
+  - In `tests/persistence.rs`, verify that a row survives dropping and reopening `db::new_file`, query `PRAGMA foreign_keys` on the reopened file connection, and exercise each schema cascade edge: deleting a team removes its `team_members`, deleting a user removes their `team_members`, and deleting a note removes its `note_shares`.
+  - In `tests/search_edges.rs`, create notes with literal `%`, `_`, and `\` in searchable text and assert each percent-encoded `q` finds only its matching note. Assert `?q=` returns the same note IDs as the unfiltered list.
+  - These are regression tests only. Any failure, especially the file-connection foreign-key check, is recorded for panel prep; do not modify the frozen database or notes implementation. Branch merges only if the full suite passes.
+- First action: add `tests/persistence.rs` using a standard-library temporary-path helper.
+- Step cap: 5 (write the two tests, run `cargo test`, review the diff, append the receipt).
+- Verification command: `cargo test` — require every existing and new test to pass for merge eligibility.
+- Gate: [*] approved by task owner's Writer C instruction; merge condition is full-suite green.
+
+Receipt (writer appends):
+- Files changed: `tests/persistence.rs`, `tests/search_edges.rs`, and this Box 8 receipt in `BOXES.md`. Writer C made no changes to `src/db.rs` or `src/notes.rs`.
+- Verification output: final `cargo test` passed all 56 tests (0 failed), including both persistence tests and the search edge test. `cargo fmt --check` and `git diff --check` also passed on the final workspace.
+- Ambiguity hit: the suspected file-connection foreign-key issue did not reproduce: `PRAGMA foreign_keys` returned 1 on both the initial and reopened file connection, and each declared cascade passed. The workspace contains concurrent changes outside Writer C's files, including in frozen `src/db.rs`; Writer C left those changes untouched.
+
+## Box 9: Team-member actor authorization (Writer A)
+- Files touched: `src/teams.rs` (require a valid team-member actor on POST `/teams/{id}/members`), `tests/teams.rs` (the three authorization cases and authenticated call sites), and `tests/list.rs` (authenticated setup call site for its existing team-member POST).
+- Decisions made:
+  - Only POST `/teams/{id}/members` requires `X-User-Id`. Missing, malformed, or unknown actor IDs return 401; a valid non-member actor returns 403. A member may add a user using the existing request body and status behavior.
+  - GET `/teams/{id}/members` remains open. POST `/teams` remains unchanged and takes no actor header; its `created_by` remains the team creator and is added as a member.
+  - Tests cover unauthenticated POST → 401, non-member POST → 403, and creator POST → 201. Existing POST call sites identify a member actor.
+- First action: add actor authentication and membership enforcement to `teams::add_member` only.
+- Step cap: 4 (`teams.rs`, affected test call sites and cases, `cargo test`, receipt).
+- Verification command: `cargo test` — record actual total.
+- Gate: [*] approved by Morgan's direct scope instruction.
+
+Receipt (writer appends):
+- Files changed: `src/teams.rs` (header parsing, actor existence and team-membership checks under one DB lock), `tests/teams.rs` (creator-authenticated member addition, unauthenticated and non-member cases, and existing POST call-site headers), `tests/list.rs` (creator header in its member-add setup call), and `BOXES.md` (this box and receipt). Team creation and GET member listing were left unchanged.
+- Verification output: `cargo test`:
+  ```
+  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+  test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.11s
+  test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+  test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+  test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+  test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+  test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+  test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+  test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  ```
+  Total: 56 passed, 0 failed.
+- Ambiguity hit: repository search found an additional member-add setup call in `tests/list.rs`; it now supplies the team creator as actor. No policy ambiguity remained.

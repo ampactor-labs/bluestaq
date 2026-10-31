@@ -321,3 +321,110 @@ async fn delete_share_is_idempotent_and_revokes_note_access() {
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn owner_can_list_shares_in_user_id_order_with_exact_response_shape() {
+    let fixture = fixture().await;
+
+    // Insert in descending id order so the response proves it is sorted.
+    assert_eq!(
+        post_share(
+            &fixture.app,
+            fixture.note_id,
+            fixture.owner_id,
+            fixture.outsider_id,
+            "write",
+        )
+        .await,
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        post_share(
+            &fixture.app,
+            fixture.note_id,
+            fixture.owner_id,
+            fixture.recipient_id,
+            "read",
+        )
+        .await,
+        StatusCode::CREATED
+    );
+
+    let (status, body) = request(
+        &fixture.app,
+        Method::GET,
+        &format!("/notes/{}/shares", fixture.note_id),
+        Some(fixture.owner_id),
+        None,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        value(&body),
+        json!([
+            {"user_id": fixture.recipient_id, "permission": "read"},
+            {"user_id": fixture.outsider_id, "permission": "write"}
+        ])
+    );
+}
+
+#[tokio::test]
+async fn reader_cannot_list_note_shares() {
+    let fixture = fixture().await;
+    assert_eq!(
+        post_share(
+            &fixture.app,
+            fixture.note_id,
+            fixture.owner_id,
+            fixture.recipient_id,
+            "read",
+        )
+        .await,
+        StatusCode::CREATED
+    );
+
+    let (status, body) = request(
+        &fixture.app,
+        Method::GET,
+        &format!("/notes/{}/shares", fixture.note_id),
+        Some(fixture.recipient_id),
+        None,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(value(&body), json!({"error": "insufficient permissions"}));
+}
+
+#[tokio::test]
+async fn outsider_cannot_list_note_shares() {
+    let fixture = fixture().await;
+    let (status, body) = request(
+        &fixture.app,
+        Method::GET,
+        &format!("/notes/{}/shares", fixture.note_id),
+        Some(fixture.outsider_id),
+        None,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(value(&body), json!({"error": "note not found"}));
+}
+
+#[tokio::test]
+async fn listing_shares_for_missing_note_returns_not_found() {
+    let fixture = fixture().await;
+    let (status, body) = request(
+        &fixture.app,
+        Method::GET,
+        "/notes/999999/shares",
+        Some(fixture.owner_id),
+        None,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(value(&body), json!({"error": "note not found"}));
+}

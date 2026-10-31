@@ -1,5 +1,5 @@
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 
 use crate::db;
@@ -51,14 +51,21 @@ fn row_exists(conn: &rusqlite::Connection, table: &str, id: i64) -> rusqlite::Re
     }
 }
 
+fn member_actor_id(headers: &HeaderMap) -> Result<i64, AppError> {
+    headers
+        .get("x-user-id")
+        .ok_or_else(|| AppError::Unauthorized("missing X-User-Id header".into()))?
+        .to_str()
+        .ok()
+        .and_then(|value| value.parse::<i64>().ok())
+        .ok_or_else(|| AppError::Unauthorized("invalid X-User-Id header".into()))
+}
+
 pub async fn create_team(
     State(state): State<AppState>,
     json: Result<axum::Json<NewTeam>, axum::extract::rejection::JsonRejection>,
 ) -> Result<(StatusCode, Json<TeamOut>), AppError> {
-    let NewTeam {
-        name,
-        created_by,
-    } = json.map_err(AppError::from)?.0;
+    let NewTeam { name, created_by } = json.map_err(AppError::from)?.0;
     let name = match name.and_then(|s| {
         let t = s.trim().to_owned();
         (!t.is_empty()).then_some(t)
@@ -110,18 +117,40 @@ pub async fn get_team(
 pub async fn add_member(
     State(state): State<AppState>,
     Path(team_id_str): Path<String>,
+    headers: HeaderMap,
     json: Result<axum::Json<AddMember>, axum::extract::rejection::JsonRejection>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
+    let actor_id = member_actor_id(&headers)?;
+    let team_id = parse_id(&team_id_str)?;
+
+    let conn = state.db.lock().unwrap();
+    if !row_exists(&conn, "users", actor_id).map_err(|e| AppError::Internal(e.to_string()))? {
+        return Err(AppError::Unauthorized("unknown user".into()));
+    }
+    if !row_exists(&conn, "teams", team_id).map_err(|e| AppError::Internal(e.to_string()))? {
+        return Err(AppError::NotFound("team not found".into()));
+    }
+
+    let is_member = conn
+        .query_row(
+            "SELECT 1 FROM team_members WHERE team_id = ?1 AND user_id = ?2",
+            rusqlite::params![team_id, actor_id],
+            |_| Ok(()),
+        )
+        .map(|()| true)
+        .or_else(|error| match error {
+            rusqlite::Error::QueryReturnedNoRows => Ok(false),
+            other => Err(other),
+        })
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+    if !is_member {
+        return Err(AppError::Forbidden("not a member of this team".into()));
+    }
+
     let user_id = match json.map_err(AppError::from)?.0.user_id {
         Some(id) => id,
         None => return Err(AppError::BadRequest("user_id is required".into())),
     };
-    let team_id = parse_id(&team_id_str)?;
-
-    let conn = state.db.lock().unwrap();
-    if !row_exists(&conn, "teams", team_id).map_err(|e| AppError::Internal(e.to_string()))? {
-        return Err(AppError::NotFound("team not found".into()));
-    }
     if !row_exists(&conn, "users", user_id).map_err(|e| AppError::Internal(e.to_string()))? {
         return Err(AppError::NotFound("user not found".into()));
     }

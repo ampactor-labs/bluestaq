@@ -47,13 +47,14 @@ async fn make_team(app: &axum::Router, creator_id: i64) -> i64 {
         .unwrap()
 }
 
-async fn add_member(app: &axum::Router, team_id: i64, user_id: i64) {
+async fn add_member(app: &axum::Router, team_id: i64, actor_id: i64, user_id: i64) {
     let body = format!(r#"{{"user_id":{user_id}}}"#);
+    let actor_header = actor_id.to_string();
     let (status, _) = req(
         app.clone(),
         "POST",
         &format!("/teams/{team_id}/members"),
-        None,
+        Some(&actor_header),
         Some(&body),
     )
     .await;
@@ -100,7 +101,7 @@ async fn setup() -> Fixture {
     let gamma_id = make_note(&app, other_id, "Gamma", None).await;
 
     let team_id = make_team(&app, owner_id).await;
-    add_member(&app, team_id, other_id).await;
+    add_member(&app, team_id, owner_id, other_id).await;
     let delta_id = make_note(&app, other_id, "Delta", Some(team_id)).await;
 
     let conn = state.db.lock().unwrap();
