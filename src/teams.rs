@@ -170,12 +170,33 @@ pub async fn add_member(
 pub async fn list_members(
     State(state): State<AppState>,
     Path(team_id_str): Path<String>,
+    headers: HeaderMap,
 ) -> Result<Json<Vec<UserOut>>, AppError> {
+    let actor_id = member_actor_id(&headers)?;
     let team_id = parse_id(&team_id_str)?;
 
     let conn = state.db.lock().unwrap();
+    if !row_exists(&conn, "users", actor_id).map_err(|e| AppError::Internal(e.to_string()))? {
+        return Err(AppError::Unauthorized("unknown user".into()));
+    }
     if !row_exists(&conn, "teams", team_id).map_err(|e| AppError::Internal(e.to_string()))? {
         return Err(AppError::NotFound("team not found".into()));
+    }
+
+    let is_member = conn
+        .query_row(
+            "SELECT 1 FROM team_members WHERE team_id = ?1 AND user_id = ?2",
+            rusqlite::params![team_id, actor_id],
+            |_| Ok(()),
+        )
+        .map(|()| true)
+        .or_else(|error| match error {
+            rusqlite::Error::QueryReturnedNoRows => Ok(false),
+            other => Err(other),
+        })
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+    if !is_member {
+        return Err(AppError::Forbidden("not a member of this team".into()));
     }
     let mut stmt = conn
         .prepare(

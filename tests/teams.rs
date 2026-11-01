@@ -81,7 +81,7 @@ async fn create_team_201_creator_is_sole_member() {
     assert_eq!(v["name"], "Space Force");
     assert!(!v["created_at"].as_str().unwrap().is_empty());
 
-    let (status, body) = req(app, "GET", &format!("/teams/{team_id}/members"), None).await;
+    let (status, body) = req_as(app, "GET", &format!("/teams/{team_id}/members"), None, creator).await;
     assert_eq!(status, 200);
     let members: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
     assert_eq!(members.len(), 1);
@@ -171,7 +171,7 @@ async fn creator_adds_member_201_and_members_now_two() {
     assert_eq!(v["team_id"], team_id);
     assert_eq!(v["user_id"], other);
 
-    let (status, body) = req(app, "GET", &format!("/teams/{team_id}/members"), None).await;
+    let (status, body) = req_as(app, "GET", &format!("/teams/{team_id}/members"), None, creator).await;
     assert_eq!(status, 200);
     let members: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
     assert_eq!(members.len(), 2);
@@ -311,4 +311,76 @@ async fn add_member_nonmember_forbidden_403() {
     assert_eq!(status, 403);
     let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(v["error"], "not a member of this team");
+}
+
+async fn make_team(app: &axum::Router, creator: i64) -> i64 {
+    let (status, body) = req(
+        app.clone(),
+        "POST",
+        "/teams",
+        Some(&format!(r#"{{"name":"T","created_by":{creator}}}"#)),
+    )
+    .await;
+    assert_eq!(status, 201);
+    serde_json::from_slice::<serde_json::Value>(&body).unwrap()["id"]
+        .as_i64()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn list_members_without_identity_401() {
+    let app = app();
+    let creator = make_user(&app, "A", "a@example.com").await;
+    let team_id = make_team(&app, creator).await;
+
+    let (status, body) = req(app, "GET", &format!("/teams/{team_id}/members"), None).await;
+    assert_eq!(status, 401);
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["error"], "missing X-User-Id header");
+}
+
+#[tokio::test]
+async fn list_members_nonmember_403() {
+    let app = app();
+    let creator = make_user(&app, "A", "a@example.com").await;
+    let outsider = make_user(&app, "B", "b@example.com").await;
+    let team_id = make_team(&app, creator).await;
+
+    let (status, body) = req_as(
+        app,
+        "GET",
+        &format!("/teams/{team_id}/members"),
+        None,
+        outsider,
+    )
+    .await;
+    assert_eq!(status, 403);
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["error"], "not a member of this team");
+}
+
+#[tokio::test]
+async fn list_members_member_200_lists_all_members() {
+    let app = app();
+    let creator = make_user(&app, "A", "a@example.com").await;
+    let other = make_user(&app, "B", "b@example.com").await;
+    let team_id = make_team(&app, creator).await;
+
+    let (status, _) = req_as(
+        app.clone(),
+        "POST",
+        &format!("/teams/{team_id}/members"),
+        Some(&format!(r#"{{"user_id":{other}}}"#)),
+        creator,
+    )
+    .await;
+    assert_eq!(status, 201);
+
+    let (status, body) = req_as(app, "GET", &format!("/teams/{team_id}/members"), None, other).await;
+    assert_eq!(status, 200);
+    let members: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    assert_eq!(members.len(), 2);
+    let mut ids: Vec<i64> = members.iter().map(|m| m["id"].as_i64().unwrap()).collect();
+    ids.sort_unstable();
+    assert_eq!(ids, vec![creator, other]);
 }
