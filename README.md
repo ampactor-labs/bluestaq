@@ -124,7 +124,7 @@ printf "Restart-persistence user ID: %s\n" "$OWNER_ID"
 | POST | /teams | No authentication required; creator becomes a member | 201 Created |
 | GET | /teams/{id} | No authentication required | 200 OK |
 | POST | /teams/{id}/members | Valid X-User-Id of an existing team member | 201 Created |
-| GET | /teams/{id}/members | Valid X-User-Id of an existing team member | 200 OK |
+| GET | /teams/{id}/members | No authentication required | 200 OK |
 | POST | /notes | Valid X-User-Id | 201 Created |
 | GET | /notes/{id} | Valid X-User-Id with owner, share, or team access | 200 OK |
 | GET | /notes | Valid X-User-Id; lists accessible notes | 200 OK |
