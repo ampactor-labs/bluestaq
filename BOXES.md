@@ -413,3 +413,22 @@ Receipt (writer appends):
   ```
   Total: 56 passed, 0 failed.
 - Ambiguity hit: none. Existing error mapping sends these rusqlite query errors to 500; no tests were added.
+
+## Post-submission erratum (documentation only)
+
+A post-submission verification read every README claim against the source at the submitted commit (be008b6) and found three documentation defects, all left by Box 7.1 landing after the README was finalized in Box 7. This erratum corrects the README only; no behavior changes:
+
+- The endpoint table claimed POST /teams/{id}/members requires no authentication. Since Box 7.1 it requires the X-User-Id of an existing team member (401 missing/invalid/unknown, 403 non-member). The row now says so.
+- The example flow's add-member curl sent no X-User-Id header, so the flow aborted at that step against the shipped server. The step now sends the team creator's header; the rest of the flow was verified step by step and is unchanged.
+- The error-shape sentence claimed all errors use the {"error":"..."} JSON shape. That holds for application and extractor errors; framework-generated 405 responses are the exception. The sentence now reads "Application errors use JSON shaped like".
+
+Verification: the corrected example flow was executed verbatim against the submitted code and completed end to end; cargo test unchanged at 56 passed, 0 failed.
+
+## Post-submission hardening (branch: post-submission-hardening)
+
+Prepared after submission and kept off main. Two changes:
+
+- GET /teams/{id}/members now requires the X-User-Id of an existing team member, matching the authorization added to POST members in Box 7.1: 401 for a missing, invalid, or unknown identity, 404 for an unknown team, 403 "not a member of this team" for a non-member. In a header-identity system the member list enumerates the very IDs that act as credentials, so it gets the same protection as everything else. The two existing roster call sites in tests/teams.rs now pass the team creator's identity with their original assertions unchanged, and three tests were added: no identity 401, non-member 403, member 200 listing both members.
+- tests/fault_injection.rs adds the coverage Box 7.2 shipped without: it runs the service on a file-backed database, drops the note_shares table through a second connection, and verifies that a non-owner read then returns the promised 500 JSON error instead of failing closed to a 404, while the owner path (which short-circuits before the share query) still returns 200.
+
+Verification: cargo test 60 passed, 0 failed (teams 14, fault_injection 1; submitted main is 56). The README example flow runs verbatim against this branch with exit 0, and the roster returns 401 without a header, 200 for a member, and 403 for an outsider against the live server. The README roster row is updated in this branch to match. A created_by actor-match check for POST /teams/{id}/members was considered and deliberately not implemented: with self-asserted header identity it adds no real security, only the appearance of it.

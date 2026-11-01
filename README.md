@@ -66,6 +66,7 @@ TEAM_ID=$(
 
 curl -fsS -X POST "$BASE_URL/teams/$TEAM_ID/members" \
   -H "Content-Type: application/json" \
+  -H "X-User-Id: $OWNER_ID" \
   -d "{\"user_id\":$MEMBER_ID}"
 
 NOTE_RESPONSE=$(
@@ -122,8 +123,8 @@ printf "Restart-persistence user ID: %s\n" "$OWNER_ID"
 | GET | /users/{id} | No authentication required | 200 OK |
 | POST | /teams | No authentication required; creator becomes a member | 201 Created |
 | GET | /teams/{id} | No authentication required | 200 OK |
-| POST | /teams/{id}/members | No authentication required | 201 Created |
-| GET | /teams/{id}/members | No authentication required | 200 OK |
+| POST | /teams/{id}/members | Valid X-User-Id of an existing team member | 201 Created |
+| GET | /teams/{id}/members | Valid X-User-Id of an existing team member | 200 OK |
 | POST | /notes | Valid X-User-Id | 201 Created |
 | GET | /notes/{id} | Valid X-User-Id with owner, share, or team access | 200 OK |
 | GET | /notes | Valid X-User-Id; lists accessible notes | 200 OK |
@@ -133,7 +134,7 @@ printf "Restart-persistence user ID: %s\n" "$OWNER_ID"
 | GET | /notes/{id}/shares | Owner | 200 OK |
 | DELETE | /notes/{id}/shares/{user_id} | Owner | 204 No Content |
 
-All note and share endpoints require a valid X-User-Id. A missing, invalid, or unknown user ID returns 401. A user with no note access receives 404; a user who has access but lacks the requested permission receives 403. Errors use JSON shaped like {"error":"..."}; responses may use 400, 401, 403, 404, 409, or 500.
+All note and share endpoints require a valid X-User-Id. A missing, invalid, or unknown user ID returns 401. A user with no note access receives 404; a user who has access but lacks the requested permission receives 403. Application errors use JSON shaped like {"error":"..."}; responses may use 400, 401, 403, 404, 409, or 500.
 
 ## Tradeoffs
 
